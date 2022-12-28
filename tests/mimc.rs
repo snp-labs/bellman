@@ -21,6 +21,87 @@ mod common;
 use common::*;
 
 #[test]
+fn test_mimc7() {
+    // This may not be cryptographically safe, use
+    // `OsRng` (for example) in production software.
+    let mut rng = thread_rng();
+
+    // Generate the MiMC round constants
+    let constants = (0..MIMC7_ROUNDS)
+        .map(|_| Scalar::random(&mut rng))
+        .collect::<Vec<_>>();
+
+    println!("Creating parameters...");
+
+    // Create parameters for our circuit
+    let params = {
+        let c = MiMC7Demo {
+            xl: None,
+            xr: None,
+            constants: &constants,
+        };
+
+        generate_random_parameters::<Bls12, _, _>(c, &mut rng).unwrap()
+    };
+
+    let pvk = prepare_verifying_key(&params.vk);
+
+    println!("Creating proofs...");
+
+    // Let's benchmark stuff!
+    const SAMPLES: u32 = 50;
+    let mut total_proving = Duration::new(0, 0);
+    let mut total_verifying = Duration::new(0, 0);
+
+    // Just a place to put the proof data, so we can
+    // benchmark deserialization.
+    let mut proof_vec = vec![];
+
+    for _ in 0..SAMPLES {
+        // Generate a random preimage and compute the image
+        let xl = Scalar::random(&mut rng);
+        let xr = Scalar::random(&mut rng);
+        let image = mimc7(xl, xr, &constants);
+        proof_vec.truncate(0);
+
+        let start = Instant::now();
+        {
+            // Create an instance of our circuit (with the
+            // witness)
+            let c = MiMC7Demo {
+                xl: Some(xl),
+                xr: Some(xr),
+                constants: &constants,
+            };
+            // Create a groth16 proof with our parameters.
+            let proof = create_random_proof(c, &params, &mut rng).unwrap();
+
+            proof.write(&mut proof_vec).unwrap();
+        }
+
+        total_proving += start.elapsed();
+
+        let start = Instant::now();
+        let proof = Proof::read(&proof_vec[..]).unwrap();
+        // Check the proof
+        assert!(verify_proof(&pvk, &proof, &[image]).is_ok());
+        total_verifying += start.elapsed();
+    }
+    let proving_avg = total_proving / SAMPLES;
+    let proving_avg =
+        proving_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (proving_avg.as_secs() as f64);
+
+    let verifying_avg = total_verifying / SAMPLES;
+    let verifying_avg =
+        verifying_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (verifying_avg.as_secs() as f64);
+
+    unsafe {
+        println!("MiMC7 Average proving time: {:?} seconds", proving_avg); 
+        println!("MiMC7 Average verifying time: {:?} seconds", verifying_avg);
+    }
+}
+
+#[test]
 fn test_mimc() {
     // This may not be cryptographically safe, use
     // `OsRng` (for example) in production software.
@@ -75,7 +156,6 @@ fn test_mimc() {
                 xr: Some(xr),
                 constants: &constants,
             };
-
             // Create a groth16 proof with our parameters.
             let proof = create_random_proof(c, &params, &mut rng).unwrap();
 
