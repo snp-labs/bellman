@@ -4,14 +4,14 @@
 use std::ops::{AddAssign, MulAssign, Neg, SubAssign};
 
 use crate::{ConstraintSystem, SynthesisError};
-pub use bls12_381::{Scalar};
+pub use bls12_381::Scalar;
 
 use super::{
-    Assignment,
-    num::{AllocatedNum, Num},
-    lookup::lookup3_xy,
     boolean::Boolean,
-    constants::*
+    constants::*,
+    lookup::lookup3_xy,
+    num::{AllocatedNum, Num},
+    Assignment,
 };
 
 use group::Curve;
