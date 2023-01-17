@@ -436,6 +436,17 @@ mod test {
     }
 
     #[test]
+    fn test_allocated_num1() {
+        let mut cs = TestConstraintSystem::new();
+
+        AllocatedNum::alloc(&mut cs,  || Ok(Scalar::zero())).unwrap();
+
+        println!("test_allocated_num1 executed...");
+
+        assert!(cs.get("num") == Scalar::zero());
+    }
+
+    #[test]
     fn test_num_squaring() {
         let mut cs = TestConstraintSystem::new();
 

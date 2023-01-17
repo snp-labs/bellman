@@ -376,3 +376,72 @@ fn test_with_bls12() {
 
     assert_eq!(naive, fast);
 }
+
+// #[cfg(feature = "pairing")]
+// #[test]
+// fn test_pedersen_comitment_with_bls12_381() {
+//     fn naive_multiexp<G: PrimeCurve>(
+//         bases: Arc<Vec<<G as PrimeCurve>::Affine>>,
+//         exponents: Arc<Vec<G::Scalar>>,
+//     ) -> G {
+//         assert_eq!(bases.len(), exponents.len());
+
+//         let mut acc = G::identity();
+
+//         for (base, exp) in bases.iter().zip(exponents.iter()) {
+//             AddAssign::<&G>::add_assign(&mut acc, &(*base * *exp));
+//         }
+
+//         acc
+//     }
+
+//     use bls12_381::{Bls12, G1Affine, Scalar};
+//     use ff::Field;
+//     use group::{Curve, Group};
+//     use pairing::Engine;
+
+//     const SAMPLES: usize = 1 << 14;
+
+//     let mut rng = rand::thread_rng();
+//     let v = Arc::new(
+//         (0..SAMPLES)
+//             .map(|_| Scalar::random(&mut rng))
+//             .collect::<Vec<_>>(),
+//     );
+//     let msg = Arc::new(
+//         (0..SAMPLES)
+//             .map(|_| Scalar::random(&mut rng))
+//             .collect::<Vec<_>>(),
+//     );
+//     let v_bits = Arc::new(v.iter().map(|e| e.into()).collect::<Vec<_>>());
+//     let msg_bits: Arc<Vec<Exponent<Scalar>>> = Arc::new(msg.iter().map(|e| e.into()).collect::<Vec<_>>());
+    
+//     let g = Arc::new(
+//         (0..SAMPLES)
+//             .map(|_| <Bls12 as Engine>::G1::random(&mut rng).to_affine())
+//             .collect::<Vec<_>>(),
+//     );
+
+//     let G: <Bls12 as Engine>::G1 = naive_multiexp(g.clone(), v);
+
+    
+//     let h = Arc::new(
+//         (0..SAMPLES)
+//             .map(|_| <Bls12 as Engine>::G1::random(&mut rng).to_affine())
+//             .collect::<Vec<_>>(),
+//     );
+
+//     let H: <Bls12 as Engine>::G1 = naive_multiexp(h.clone(), msg);
+
+//     let cm: <Bls12 as Engine>::G1 = G + H;
+
+//     let pool = Worker::new();
+//     let circuit_exp1 = multiexp(&pool, (g, 0), FullDensity, v_bits).wait().unwrap();
+//     let circuit_exp2 = multiexp(&pool, (h, 0), FullDensity, msg_bits).wait().unwrap();
+
+
+//     // AddAssign::<&Bls12>::add_assign(&mut circuit_exp1, &mut circuit_exp2);
+//     assert_eq!(G, circuit_exp1);
+//     assert_eq!(H, circuit_exp2);
+
+// }
