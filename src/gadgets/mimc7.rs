@@ -1,11 +1,11 @@
 use super::constants::ROUND_CONSTANTS;
-use bls12_381::Scalar;
 use crate::{ConstraintSystem, SynthesisError, Variable};
-use ff::{PrimeField, Field};
+use bls12_381::Scalar;
+use ff::{Field, PrimeField};
 
 pub const MIMC7_ROUNDS: usize = 91;
 
-pub fn mimc7<S: PrimeField>(xl: S, xr: S, constants: &[S]) -> S{
+pub fn mimc7<S: PrimeField>(xl: S, xr: S, constants: &[S]) -> S {
     assert_eq!(constants.len(), MIMC7_ROUNDS);
     let mut res = mimc7_round(xl, xr, &Field::zero());
     for i in 1..MIMC7_ROUNDS {
@@ -18,20 +18,20 @@ pub fn mimc7<S: PrimeField>(xl: S, xr: S, constants: &[S]) -> S{
     res
 }
 
-pub fn mimc7_round<S: PrimeField>(mut msg: S, key: S, constant: &S) -> S{
+pub fn mimc7_round<S: PrimeField>(mut msg: S, key: S, constant: &S) -> S {
     msg.add_assign(key);
     msg.add_assign(constant);
     let mut tmp = msg;
     let mut res = msg;
-    tmp = tmp.square(); 
+    tmp = tmp.square();
     let tmp2 = tmp.square();
-    res.mul_assign(&tmp); 
+    res.mul_assign(&tmp);
     res.mul_assign(&tmp2);
 
     res
 }
 
-pub(crate) fn get_mimc_constants() -> Vec<Scalar> {
+pub fn get_mimc_constants() -> Vec<Scalar> {
     let constants = (0..91)
         .map(|idx| Scalar::from_bytes(&ROUND_CONSTANTS[idx]).unwrap())
         .collect::<Vec<_>>();
@@ -39,9 +39,10 @@ pub(crate) fn get_mimc_constants() -> Vec<Scalar> {
     constants
 }
 
-pub(crate) fn mimc7_cs<S: PrimeField, CS: ConstraintSystem<S>>(
+pub fn mimc7_cs<S: PrimeField, CS: ConstraintSystem<S>>(
     cs: &mut CS,
     mut xl_value: Option<S>,
+    // currerntly unused
     mut xr_value: Option<S>,
     round_constants: &[S],
 ) -> Option<S> {

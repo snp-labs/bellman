@@ -1,6 +1,6 @@
-use bls12_381::{Scalar};
+use crate::{Circuit, ConstraintSystem, SynthesisError};
+use bls12_381::Scalar;
 use jubjub::Fr;
-use crate::{ConstraintSystem, SynthesisError, Circuit};
 
 use super::boolean::{self, Boolean};
 use super::ecc;
@@ -16,8 +16,8 @@ pub struct PedersenCommit {
 
 impl PedersenCommit {
     pub fn commit(&self) -> jubjub::SubgroupPoint {
-        (_VALUE_COMMITMENT_VALUE_GENERATOR * self.msg) + 
-            (_VALUE_COMMITMENT_RANDOMNESS_GENERATOR * self.rand)
+        (_VALUE_COMMITMENT_VALUE_GENERATOR * self.msg)
+            + (_VALUE_COMMITMENT_RANDOMNESS_GENERATOR * self.rand)
     }
 }
 
@@ -27,9 +27,11 @@ pub struct PedersenCommitCircuit {
 
 impl Circuit<Scalar> for PedersenCommitCircuit {
     fn synthesize<CS: ConstraintSystem<Scalar>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
-        
-        let _value_bits = expose_pedersen_commitment(cs.namespace(|| "Pedersen Commitment"), self.pedersen_commitment)?;
-        
+        let _value_bits = expose_pedersen_commitment(
+            cs.namespace(|| "Pedersen Commitment"),
+            self.pedersen_commitment,
+        )?;
+
         Ok(())
     }
 }
@@ -38,17 +40,18 @@ fn expose_pedersen_commitment<CS>(
     mut cs: CS,
     pedersen_commitment: Option<PedersenCommit>,
 ) -> Result<Vec<Boolean>, SynthesisError>
-where CS: ConstraintSystem<Scalar>,
+where
+    CS: ConstraintSystem<Scalar>,
 {
     let msg_bits = boolean::field_into_boolean_vec_le(
-        cs.namespace(||"msg"),
+        cs.namespace(|| "msg"),
         pedersen_commitment.as_ref().map(|c| c.msg),
     )?;
-    
+
     let msg = ecc::fixed_base_multiplication(
         cs.namespace(|| "compute the msg in the exponent"),
-    &VALUE_COMMITMENT_VALUE_GENERATOR,
-        &msg_bits
+        &VALUE_COMMITMENT_VALUE_GENERATOR,
+        &msg_bits,
     )?;
 
     let r = boolean::field_into_boolean_vec_le(
@@ -59,7 +62,7 @@ where CS: ConstraintSystem<Scalar>,
     let r = ecc::fixed_base_multiplication(
         cs.namespace(|| "r"),
         &VALUE_COMMITMENT_RANDOMNESS_GENERATOR,
-    &r,
+        &r,
     )?;
 
     let res = msg.add(cs.namespace(|| "computation of result"), &r)?;

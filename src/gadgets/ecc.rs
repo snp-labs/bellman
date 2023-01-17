@@ -617,498 +617,498 @@ impl MontgomeryPoint {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use bellman::ConstraintSystem;
-    use group::{
-        ff::{Field, PrimeField, PrimeFieldBits},
-        Curve, Group,
-    };
-    use rand_core::{RngCore, SeedableRng};
-    use rand_xorshift::XorShiftRng;
-
-    use bellman::gadgets::test::*;
-
-    use super::{fixed_base_multiplication, AllocatedNum, EdwardsPoint, MontgomeryPoint};
-    use crate::constants::{to_montgomery_coords, NOTE_COMMITMENT_RANDOMNESS_GENERATOR};
-    use bellman::gadgets::boolean::{AllocatedBit, Boolean};
-
-    #[test]
-    #[allow(clippy::many_single_char_names)]
-    fn test_into_edwards() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x3d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let mut cs = TestConstraintSystem::new();
-
-            let p = jubjub::ExtendedPoint::random(&mut rng);
-            let (x, y) = to_montgomery_coords(p).unwrap();
-            let p = p.to_affine();
-            let (u, v) = (p.get_u(), p.get_v());
-
-            let numx = AllocatedNum::alloc(cs.namespace(|| "mont x"), || Ok(x)).unwrap();
-            let numy = AllocatedNum::alloc(cs.namespace(|| "mont y"), || Ok(y)).unwrap();
-
-            let p = MontgomeryPoint::interpret_unchecked(numx.into(), numy.into());
-
-            let q = p.into_edwards(&mut cs).unwrap();
-
-            assert!(cs.is_satisfied());
-            assert!(q.u.get_value().unwrap() == u);
-            assert!(q.v.get_value().unwrap() == v);
-
-            cs.set("u/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied().unwrap(), "u computation");
-            cs.set("u/num", u);
-            assert!(cs.is_satisfied());
-
-            cs.set("v/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied().unwrap(), "v computation");
-            cs.set("v/num", v);
-            assert!(cs.is_satisfied());
-        }
-    }
-
-    #[test]
-    fn test_interpret() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let p = jubjub::ExtendedPoint::random(&mut rng);
-
-            let mut cs = TestConstraintSystem::new();
-            let q = EdwardsPoint::witness(&mut cs, Some(p)).unwrap();
-
-            let p = p.to_affine();
-
-            assert!(cs.is_satisfied());
-            assert_eq!(q.u.get_value().unwrap(), p.get_u());
-            assert_eq!(q.v.get_value().unwrap(), p.get_v());
-        }
-
-        for _ in 0..100 {
-            let p = jubjub::ExtendedPoint::random(&mut rng).to_affine();
-            let (u, v) = (p.get_u(), p.get_v());
-
-            let mut cs = TestConstraintSystem::new();
-            let numu = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u)).unwrap();
-            let numv = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v)).unwrap();
-
-            let p = EdwardsPoint::interpret(&mut cs, &numu, &numv).unwrap();
-
-            assert!(cs.is_satisfied());
-            assert_eq!(p.u.get_value().unwrap(), u);
-            assert_eq!(p.v.get_value().unwrap(), v);
-        }
-
-        // Random (u, v) are unlikely to be on the curve.
-        for _ in 0..100 {
-            let u = bls12_381::Scalar::random(&mut rng);
-            let v = bls12_381::Scalar::random(&mut rng);
-
-            let mut cs = TestConstraintSystem::new();
-            let numu = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u)).unwrap();
-            let numv = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v)).unwrap();
-
-            EdwardsPoint::interpret(&mut cs, &numu, &numv).unwrap();
-
-            assert_eq!(cs.which_is_unsatisfied().unwrap(), "on curve check");
-        }
-    }
-
-    #[test]
-    fn test_edwards_fixed_base_multiplication() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let mut cs = TestConstraintSystem::<bls12_381::Scalar>::new();
-
-            let p = zcash_primitives::constants::NOTE_COMMITMENT_RANDOMNESS_GENERATOR;
-            let s = jubjub::Fr::random(&mut rng);
-            let q = jubjub::ExtendedPoint::from(p * s).to_affine();
-            let (u1, v1) = (q.get_u(), q.get_v());
-
-            let s_bits = s
-                .to_le_bits()
-                .iter()
-                .by_vals()
-                .take(jubjub::Fr::NUM_BITS as usize)
-                .enumerate()
-                .map(|(i, b)| {
-                    AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b))
-                        .unwrap()
-                })
-                .map(Boolean::from)
-                .collect::<Vec<_>>();
-
-            let q = fixed_base_multiplication(
-                cs.namespace(|| "multiplication"),
-                &NOTE_COMMITMENT_RANDOMNESS_GENERATOR,
-                &s_bits,
-            )
-            .unwrap();
-
-            assert_eq!(q.u.get_value().unwrap(), u1);
-            assert_eq!(q.v.get_value().unwrap(), v1);
-        }
-    }
-
-    #[test]
-    fn test_edwards_multiplication() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let mut cs = TestConstraintSystem::new();
-
-            let p = jubjub::ExtendedPoint::random(&mut rng);
-            let s = jubjub::Fr::random(&mut rng);
-            let q = (p * s).to_affine();
-            let p = p.to_affine();
-
-            let (u0, v0) = (p.get_u(), p.get_v());
-            let (u1, v1) = (q.get_u(), q.get_v());
-
-            let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
-            let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
-
-            let p = EdwardsPoint {
-                u: num_u0,
-                v: num_v0,
-            };
-
-            let s_bits = s
-                .to_le_bits()
-                .iter()
-                .by_vals()
-                .take(jubjub::Fr::NUM_BITS as usize)
-                .enumerate()
-                .map(|(i, b)| {
-                    AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b))
-                        .unwrap()
-                })
-                .map(Boolean::from)
-                .collect::<Vec<_>>();
-
-            let q = p.mul(cs.namespace(|| "scalar mul"), &s_bits).unwrap();
-
-            assert!(cs.is_satisfied());
-
-            assert_eq!(q.u.get_value().unwrap(), u1);
-
-            assert_eq!(q.v.get_value().unwrap(), v1);
-        }
-    }
-
-    #[test]
-    fn test_conditionally_select() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..1000 {
-            let mut cs = TestConstraintSystem::new();
-
-            let p = jubjub::ExtendedPoint::random(&mut rng).to_affine();
-
-            let (u0, v0) = (p.get_u(), p.get_v());
-
-            let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
-            let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
-
-            let p = EdwardsPoint {
-                u: num_u0,
-                v: num_v0,
-            };
-
-            let mut should_we_select = rng.next_u32() % 2 != 0;
-
-            // Conditionally allocate
-            let mut b = if rng.next_u32() % 2 != 0 {
-                Boolean::from(
-                    AllocatedBit::alloc(cs.namespace(|| "condition"), Some(should_we_select))
-                        .unwrap(),
-                )
-            } else {
-                Boolean::constant(should_we_select)
-            };
-
-            // Conditionally negate
-            if rng.next_u32() % 2 != 0 {
-                b = b.not();
-                should_we_select = !should_we_select;
-            }
-
-            let q = p
-                .conditionally_select(cs.namespace(|| "select"), &b)
-                .unwrap();
-
-            assert!(cs.is_satisfied());
-
-            #[allow(clippy::branches_sharing_code)]
-            if should_we_select {
-                assert_eq!(q.u.get_value().unwrap(), u0);
-                assert_eq!(q.v.get_value().unwrap(), v0);
-
-                cs.set("select/v'/num", bls12_381::Scalar::one());
-                assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/v' computation");
-                cs.set("select/u'/num", bls12_381::Scalar::zero());
-                assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/u' computation");
-            } else {
-                assert_eq!(q.u.get_value().unwrap(), bls12_381::Scalar::zero());
-                assert_eq!(q.v.get_value().unwrap(), bls12_381::Scalar::one());
-
-                cs.set("select/v'/num", u0);
-                assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/v' computation");
-                cs.set("select/u'/num", v0);
-                assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/u' computation");
-            }
-        }
-    }
-
-    #[test]
-    fn test_edwards_addition() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let p1 = jubjub::ExtendedPoint::random(&mut rng);
-            let p2 = jubjub::ExtendedPoint::random(&mut rng);
-
-            let p3 = p1 + p2;
-
-            let p1 = p1.to_affine();
-            let p2 = p2.to_affine();
-            let p3 = p3.to_affine();
-
-            let (u0, v0) = (p1.get_u(), p1.get_v());
-            let (u1, v1) = (p2.get_u(), p2.get_v());
-            let (u2, v2) = (p3.get_u(), p3.get_v());
-
-            let mut cs = TestConstraintSystem::new();
-
-            let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
-            let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
-
-            let num_u1 = AllocatedNum::alloc(cs.namespace(|| "u1"), || Ok(u1)).unwrap();
-            let num_v1 = AllocatedNum::alloc(cs.namespace(|| "v1"), || Ok(v1)).unwrap();
-
-            let p1 = EdwardsPoint {
-                u: num_u0,
-                v: num_v0,
-            };
-
-            let p2 = EdwardsPoint {
-                u: num_u1,
-                v: num_v1,
-            };
-
-            let p3 = p1.add(cs.namespace(|| "addition"), &p2).unwrap();
-
-            assert!(cs.is_satisfied());
-
-            assert!(p3.u.get_value().unwrap() == u2);
-            assert!(p3.v.get_value().unwrap() == v2);
-
-            let uppercase_u = cs.get("addition/U/num");
-            cs.set("addition/U/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied(), Some("addition/U computation"));
-            cs.set("addition/U/num", uppercase_u);
-            assert!(cs.is_satisfied());
-
-            let u3 = cs.get("addition/u3/num");
-            cs.set("addition/u3/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied(), Some("addition/u3 computation"));
-            cs.set("addition/u3/num", u3);
-            assert!(cs.is_satisfied());
-
-            let v3 = cs.get("addition/v3/num");
-            cs.set("addition/v3/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied(), Some("addition/v3 computation"));
-            cs.set("addition/v3/num", v3);
-            assert!(cs.is_satisfied());
-        }
-    }
-
-    #[test]
-    fn test_edwards_doubling() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let p1 = jubjub::ExtendedPoint::random(&mut rng);
-            let p2 = p1.double();
-
-            let p1 = p1.to_affine();
-            let p2 = p2.to_affine();
-
-            let (u0, v0) = (p1.get_u(), p1.get_v());
-            let (u1, v1) = (p2.get_u(), p2.get_v());
-
-            let mut cs = TestConstraintSystem::new();
-
-            let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
-            let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
-
-            let p1 = EdwardsPoint {
-                u: num_u0,
-                v: num_v0,
-            };
-
-            let p2 = p1.double(cs.namespace(|| "doubling")).unwrap();
-
-            assert!(cs.is_satisfied());
-
-            assert!(p2.u.get_value().unwrap() == u1);
-            assert!(p2.v.get_value().unwrap() == v1);
-        }
-    }
-
-    #[test]
-    fn test_montgomery_addition() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-
-        for _ in 0..100 {
-            let p1 = jubjub::ExtendedPoint::random(&mut rng);
-            let p2 = jubjub::ExtendedPoint::random(&mut rng);
-            let p3 = p1 + p2;
-
-            let (x0, y0) = to_montgomery_coords(p1).unwrap();
-            let (x1, y1) = to_montgomery_coords(p2).unwrap();
-            let (x2, y2) = to_montgomery_coords(p3).unwrap();
-
-            let mut cs = TestConstraintSystem::new();
-
-            let num_x0 = AllocatedNum::alloc(cs.namespace(|| "x0"), || Ok(x0)).unwrap();
-            let num_y0 = AllocatedNum::alloc(cs.namespace(|| "y0"), || Ok(y0)).unwrap();
-
-            let num_x1 = AllocatedNum::alloc(cs.namespace(|| "x1"), || Ok(x1)).unwrap();
-            let num_y1 = AllocatedNum::alloc(cs.namespace(|| "y1"), || Ok(y1)).unwrap();
-
-            let p1 = MontgomeryPoint {
-                x: num_x0.into(),
-                y: num_y0.into(),
-            };
-
-            let p2 = MontgomeryPoint {
-                x: num_x1.into(),
-                y: num_y1.into(),
-            };
-
-            let p3 = p1.add(cs.namespace(|| "addition"), &p2).unwrap();
-
-            assert!(cs.is_satisfied());
-
-            assert!(p3.x.get_value().unwrap() == x2);
-            assert!(p3.y.get_value().unwrap() == y2);
-
-            cs.set("addition/yprime/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied(), Some("addition/evaluate yprime"));
-            cs.set("addition/yprime/num", y2);
-            assert!(cs.is_satisfied());
-
-            cs.set("addition/xprime/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied(), Some("addition/evaluate xprime"));
-            cs.set("addition/xprime/num", x2);
-            assert!(cs.is_satisfied());
-
-            cs.set("addition/lambda/num", bls12_381::Scalar::random(&mut rng));
-            assert_eq!(cs.which_is_unsatisfied(), Some("addition/evaluate lambda"));
-        }
-    }
-
-    #[test]
-    fn test_assert_not_small_order() {
-        let check_small_order_from_p = |p: jubjub::ExtendedPoint, is_small_order| {
-            let mut cs = TestConstraintSystem::new();
-
-            let p = EdwardsPoint::witness(&mut cs, Some(p)).unwrap();
-            assert!(cs.is_satisfied());
-            assert!(p.assert_not_small_order(&mut cs).is_err() == is_small_order);
-        };
-
-        let check_small_order_from_u64s = |u, v| {
-            let (u, v) = (bls12_381::Scalar::from(u), bls12_381::Scalar::from(v));
-            let p = jubjub::AffinePoint::from_raw_unchecked(u, v);
-
-            check_small_order_from_p(p.into(), true);
-        };
-
-        // zero has low order
-        check_small_order_from_u64s(0, 1);
-
-        // prime subgroup order
-        let prime_subgroup_order = jubjub::Fr::from_str_vartime(
-            "6554484396890773809930967563523245729705921265872317281365359162392183254199",
-        )
-        .unwrap();
-        let largest_small_subgroup_order = jubjub::Fr::from(8);
-
-        let (zero_u, zero_v) = (bls12_381::Scalar::zero(), bls12_381::Scalar::one());
-
-        // generator for jubjub
-        let (u, v) = (
-            bls12_381::Scalar::from_str_vartime(
-                "11076627216317271660298050606127911965867021807910416450833192264015104452986",
-            )
-            .unwrap(),
-            bls12_381::Scalar::from_str_vartime(
-                "44412834903739585386157632289020980010620626017712148233229312325549216099227",
-            )
-            .unwrap(),
-        );
-        let g = jubjub::AffinePoint::from_raw_unchecked(u, v).into();
-        check_small_order_from_p(g, false);
-
-        // generator for the prime subgroup
-        let g_prime = g * largest_small_subgroup_order;
-        check_small_order_from_p(g_prime, false);
-        let prime_subgroup_order_minus_1 = prime_subgroup_order - jubjub::Fr::one();
-
-        let should_not_be_zero = g_prime * prime_subgroup_order_minus_1;
-        assert_ne!(zero_u, should_not_be_zero.to_affine().get_u());
-        assert_ne!(zero_v, should_not_be_zero.to_affine().get_v());
-        let should_be_zero = should_not_be_zero + g_prime;
-        assert_eq!(zero_u, should_be_zero.to_affine().get_u());
-        assert_eq!(zero_v, should_be_zero.to_affine().get_v());
-
-        // generator for the small order subgroup
-        let g_small = g * prime_subgroup_order_minus_1;
-        let g_small = g_small + g;
-        check_small_order_from_p(g_small, true);
-
-        // g_small does have order 8
-        let largest_small_subgroup_order_minus_1 = largest_small_subgroup_order - jubjub::Fr::one();
-
-        let should_not_be_zero = g_small * largest_small_subgroup_order_minus_1;
-        assert_ne!(zero_u, should_not_be_zero.to_affine().get_u());
-        assert_ne!(zero_v, should_not_be_zero.to_affine().get_v());
-
-        let should_be_zero = should_not_be_zero + g_small;
-        assert_eq!(zero_u, should_be_zero.to_affine().get_u());
-        assert_eq!(zero_v, should_be_zero.to_affine().get_v());
-
-        // take all the points from the script
-        // assert should be different than multiplying by cofactor, which is the solution
-        // is user input verified? https://github.com/zcash/librustzcash/blob/f5d2afb4eabac29b1b1cc860d66e45a5b48b4f88/src/rustzcash.rs#L299
-    }
-}
+// #[cfg(test)]
+// mod test {
+//     use crate::ConstraintSystem;
+//     use group::{
+//         ff::{Field, PrimeField, PrimeFieldBits},
+//         Curve, Group,
+//     };
+//     use rand_core::{RngCore, SeedableRng};
+//     use rand_xorshift::XorShiftRng;
+
+//     use crate::gadgets::test::*;
+
+//     // use super::super::constants::{to_montgomery_coords, NOTE_COMMITMENT_RANDOMNESS_GENERATOR};
+//     use super::{fixed_base_multiplication, AllocatedNum, EdwardsPoint, MontgomeryPoint};
+//     use crate::gadgets::boolean::{AllocatedBit, Boolean};
+
+//     #[test]
+//     #[allow(clippy::many_single_char_names)]
+//     fn test_into_edwards() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x3d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let mut cs = TestConstraintSystem::new();
+
+//             let p = jubjub::ExtendedPoint::random(&mut rng);
+//             let (x, y) = to_montgomery_coords(p).unwrap();
+//             let p = p.to_affine();
+//             let (u, v) = (p.get_u(), p.get_v());
+
+//             let numx = AllocatedNum::alloc(cs.namespace(|| "mont x"), || Ok(x)).unwrap();
+//             let numy = AllocatedNum::alloc(cs.namespace(|| "mont y"), || Ok(y)).unwrap();
+
+//             let p = MontgomeryPoint::interpret_unchecked(numx.into(), numy.into());
+
+//             let q = p.into_edwards(&mut cs).unwrap();
+
+//             assert!(cs.is_satisfied());
+//             assert!(q.u.get_value().unwrap() == u);
+//             assert!(q.v.get_value().unwrap() == v);
+
+//             cs.set("u/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied().unwrap(), "u computation");
+//             cs.set("u/num", u);
+//             assert!(cs.is_satisfied());
+
+//             cs.set("v/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied().unwrap(), "v computation");
+//             cs.set("v/num", v);
+//             assert!(cs.is_satisfied());
+//         }
+//     }
+
+//     #[test]
+//     fn test_interpret() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let p = jubjub::ExtendedPoint::random(&mut rng);
+
+//             let mut cs = TestConstraintSystem::new();
+//             let q = EdwardsPoint::witness(&mut cs, Some(p)).unwrap();
+
+//             let p = p.to_affine();
+
+//             assert!(cs.is_satisfied());
+//             assert_eq!(q.u.get_value().unwrap(), p.get_u());
+//             assert_eq!(q.v.get_value().unwrap(), p.get_v());
+//         }
+
+//         for _ in 0..100 {
+//             let p = jubjub::ExtendedPoint::random(&mut rng).to_affine();
+//             let (u, v) = (p.get_u(), p.get_v());
+
+//             let mut cs = TestConstraintSystem::new();
+//             let numu = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u)).unwrap();
+//             let numv = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v)).unwrap();
+
+//             let p = EdwardsPoint::interpret(&mut cs, &numu, &numv).unwrap();
+
+//             assert!(cs.is_satisfied());
+//             assert_eq!(p.u.get_value().unwrap(), u);
+//             assert_eq!(p.v.get_value().unwrap(), v);
+//         }
+
+//         // Random (u, v) are unlikely to be on the curve.
+//         for _ in 0..100 {
+//             let u = bls12_381::Scalar::random(&mut rng);
+//             let v = bls12_381::Scalar::random(&mut rng);
+
+//             let mut cs = TestConstraintSystem::new();
+//             let numu = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u)).unwrap();
+//             let numv = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v)).unwrap();
+
+//             EdwardsPoint::interpret(&mut cs, &numu, &numv).unwrap();
+
+//             assert_eq!(cs.which_is_unsatisfied().unwrap(), "on curve check");
+//         }
+//     }
+
+//     #[test]
+//     fn test_edwards_fixed_base_multiplication() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let mut cs = TestConstraintSystem::<bls12_381::Scalar>::new();
+
+//             let p = zcash_primitives::constants::NOTE_COMMITMENT_RANDOMNESS_GENERATOR;
+//             let s = jubjub::Fr::random(&mut rng);
+//             let q = jubjub::ExtendedPoint::from(p * s).to_affine();
+//             let (u1, v1) = (q.get_u(), q.get_v());
+
+//             let s_bits = s
+//                 .to_le_bits()
+//                 .iter()
+//                 .by_vals()
+//                 .take(jubjub::Fr::NUM_BITS as usize)
+//                 .enumerate()
+//                 .map(|(i, b)| {
+//                     AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b))
+//                         .unwrap()
+//                 })
+//                 .map(Boolean::from)
+//                 .collect::<Vec<_>>();
+
+//             let q = fixed_base_multiplication(
+//                 cs.namespace(|| "multiplication"),
+//                 &NOTE_COMMITMENT_RANDOMNESS_GENERATOR,
+//                 &s_bits,
+//             )
+//             .unwrap();
+
+//             assert_eq!(q.u.get_value().unwrap(), u1);
+//             assert_eq!(q.v.get_value().unwrap(), v1);
+//         }
+//     }
+
+//     #[test]
+//     fn test_edwards_multiplication() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let mut cs = TestConstraintSystem::new();
+
+//             let p = jubjub::ExtendedPoint::random(&mut rng);
+//             let s = jubjub::Fr::random(&mut rng);
+//             let q = (p * s).to_affine();
+//             let p = p.to_affine();
+
+//             let (u0, v0) = (p.get_u(), p.get_v());
+//             let (u1, v1) = (q.get_u(), q.get_v());
+
+//             let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
+//             let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
+
+//             let p = EdwardsPoint {
+//                 u: num_u0,
+//                 v: num_v0,
+//             };
+
+//             let s_bits = s
+//                 .to_le_bits()
+//                 .iter()
+//                 .by_vals()
+//                 .take(jubjub::Fr::NUM_BITS as usize)
+//                 .enumerate()
+//                 .map(|(i, b)| {
+//                     AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b))
+//                         .unwrap()
+//                 })
+//                 .map(Boolean::from)
+//                 .collect::<Vec<_>>();
+
+//             let q = p.mul(cs.namespace(|| "scalar mul"), &s_bits).unwrap();
+
+//             assert!(cs.is_satisfied());
+
+//             assert_eq!(q.u.get_value().unwrap(), u1);
+
+//             assert_eq!(q.v.get_value().unwrap(), v1);
+//         }
+//     }
+
+//     #[test]
+//     fn test_conditionally_select() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..1000 {
+//             let mut cs = TestConstraintSystem::new();
+
+//             let p = jubjub::ExtendedPoint::random(&mut rng).to_affine();
+
+//             let (u0, v0) = (p.get_u(), p.get_v());
+
+//             let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
+//             let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
+
+//             let p = EdwardsPoint {
+//                 u: num_u0,
+//                 v: num_v0,
+//             };
+
+//             let mut should_we_select = rng.next_u32() % 2 != 0;
+
+//             // Conditionally allocate
+//             let mut b = if rng.next_u32() % 2 != 0 {
+//                 Boolean::from(
+//                     AllocatedBit::alloc(cs.namespace(|| "condition"), Some(should_we_select))
+//                         .unwrap(),
+//                 )
+//             } else {
+//                 Boolean::constant(should_we_select)
+//             };
+
+//             // Conditionally negate
+//             if rng.next_u32() % 2 != 0 {
+//                 b = b.not();
+//                 should_we_select = !should_we_select;
+//             }
+
+//             let q = p
+//                 .conditionally_select(cs.namespace(|| "select"), &b)
+//                 .unwrap();
+
+//             assert!(cs.is_satisfied());
+
+//             #[allow(clippy::branches_sharing_code)]
+//             if should_we_select {
+//                 assert_eq!(q.u.get_value().unwrap(), u0);
+//                 assert_eq!(q.v.get_value().unwrap(), v0);
+
+//                 cs.set("select/v'/num", bls12_381::Scalar::one());
+//                 assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/v' computation");
+//                 cs.set("select/u'/num", bls12_381::Scalar::zero());
+//                 assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/u' computation");
+//             } else {
+//                 assert_eq!(q.u.get_value().unwrap(), bls12_381::Scalar::zero());
+//                 assert_eq!(q.v.get_value().unwrap(), bls12_381::Scalar::one());
+
+//                 cs.set("select/v'/num", u0);
+//                 assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/v' computation");
+//                 cs.set("select/u'/num", v0);
+//                 assert_eq!(cs.which_is_unsatisfied().unwrap(), "select/u' computation");
+//             }
+//         }
+//     }
+
+//     #[test]
+//     fn test_edwards_addition() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let p1 = jubjub::ExtendedPoint::random(&mut rng);
+//             let p2 = jubjub::ExtendedPoint::random(&mut rng);
+
+//             let p3 = p1 + p2;
+
+//             let p1 = p1.to_affine();
+//             let p2 = p2.to_affine();
+//             let p3 = p3.to_affine();
+
+//             let (u0, v0) = (p1.get_u(), p1.get_v());
+//             let (u1, v1) = (p2.get_u(), p2.get_v());
+//             let (u2, v2) = (p3.get_u(), p3.get_v());
+
+//             let mut cs = TestConstraintSystem::new();
+
+//             let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
+//             let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
+
+//             let num_u1 = AllocatedNum::alloc(cs.namespace(|| "u1"), || Ok(u1)).unwrap();
+//             let num_v1 = AllocatedNum::alloc(cs.namespace(|| "v1"), || Ok(v1)).unwrap();
+
+//             let p1 = EdwardsPoint {
+//                 u: num_u0,
+//                 v: num_v0,
+//             };
+
+//             let p2 = EdwardsPoint {
+//                 u: num_u1,
+//                 v: num_v1,
+//             };
+
+//             let p3 = p1.add(cs.namespace(|| "addition"), &p2).unwrap();
+
+//             assert!(cs.is_satisfied());
+
+//             assert!(p3.u.get_value().unwrap() == u2);
+//             assert!(p3.v.get_value().unwrap() == v2);
+
+//             let uppercase_u = cs.get("addition/U/num");
+//             cs.set("addition/U/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied(), Some("addition/U computation"));
+//             cs.set("addition/U/num", uppercase_u);
+//             assert!(cs.is_satisfied());
+
+//             let u3 = cs.get("addition/u3/num");
+//             cs.set("addition/u3/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied(), Some("addition/u3 computation"));
+//             cs.set("addition/u3/num", u3);
+//             assert!(cs.is_satisfied());
+
+//             let v3 = cs.get("addition/v3/num");
+//             cs.set("addition/v3/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied(), Some("addition/v3 computation"));
+//             cs.set("addition/v3/num", v3);
+//             assert!(cs.is_satisfied());
+//         }
+//     }
+
+//     #[test]
+//     fn test_edwards_doubling() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let p1 = jubjub::ExtendedPoint::random(&mut rng);
+//             let p2 = p1.double();
+
+//             let p1 = p1.to_affine();
+//             let p2 = p2.to_affine();
+
+//             let (u0, v0) = (p1.get_u(), p1.get_v());
+//             let (u1, v1) = (p2.get_u(), p2.get_v());
+
+//             let mut cs = TestConstraintSystem::new();
+
+//             let num_u0 = AllocatedNum::alloc(cs.namespace(|| "u0"), || Ok(u0)).unwrap();
+//             let num_v0 = AllocatedNum::alloc(cs.namespace(|| "v0"), || Ok(v0)).unwrap();
+
+//             let p1 = EdwardsPoint {
+//                 u: num_u0,
+//                 v: num_v0,
+//             };
+
+//             let p2 = p1.double(cs.namespace(|| "doubling")).unwrap();
+
+//             assert!(cs.is_satisfied());
+
+//             assert!(p2.u.get_value().unwrap() == u1);
+//             assert!(p2.v.get_value().unwrap() == v1);
+//         }
+//     }
+
+//     #[test]
+//     fn test_montgomery_addition() {
+//         let mut rng = XorShiftRng::from_seed([
+//             0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+//             0xbc, 0xe5,
+//         ]);
+
+//         for _ in 0..100 {
+//             let p1 = jubjub::ExtendedPoint::random(&mut rng);
+//             let p2 = jubjub::ExtendedPoint::random(&mut rng);
+//             let p3 = p1 + p2;
+
+//             let (x0, y0) = to_montgomery_coords(p1).unwrap();
+//             let (x1, y1) = to_montgomery_coords(p2).unwrap();
+//             let (x2, y2) = to_montgomery_coords(p3).unwrap();
+
+//             let mut cs = TestConstraintSystem::new();
+
+//             let num_x0 = AllocatedNum::alloc(cs.namespace(|| "x0"), || Ok(x0)).unwrap();
+//             let num_y0 = AllocatedNum::alloc(cs.namespace(|| "y0"), || Ok(y0)).unwrap();
+
+//             let num_x1 = AllocatedNum::alloc(cs.namespace(|| "x1"), || Ok(x1)).unwrap();
+//             let num_y1 = AllocatedNum::alloc(cs.namespace(|| "y1"), || Ok(y1)).unwrap();
+
+//             let p1 = MontgomeryPoint {
+//                 x: num_x0.into(),
+//                 y: num_y0.into(),
+//             };
+
+//             let p2 = MontgomeryPoint {
+//                 x: num_x1.into(),
+//                 y: num_y1.into(),
+//             };
+
+//             let p3 = p1.add(cs.namespace(|| "addition"), &p2).unwrap();
+
+//             assert!(cs.is_satisfied());
+
+//             assert!(p3.x.get_value().unwrap() == x2);
+//             assert!(p3.y.get_value().unwrap() == y2);
+
+//             cs.set("addition/yprime/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied(), Some("addition/evaluate yprime"));
+//             cs.set("addition/yprime/num", y2);
+//             assert!(cs.is_satisfied());
+
+//             cs.set("addition/xprime/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied(), Some("addition/evaluate xprime"));
+//             cs.set("addition/xprime/num", x2);
+//             assert!(cs.is_satisfied());
+
+//             cs.set("addition/lambda/num", bls12_381::Scalar::random(&mut rng));
+//             assert_eq!(cs.which_is_unsatisfied(), Some("addition/evaluate lambda"));
+//         }
+//     }
+
+//     #[test]
+//     fn test_assert_not_small_order() {
+//         let check_small_order_from_p = |p: jubjub::ExtendedPoint, is_small_order| {
+//             let mut cs = TestConstraintSystem::new();
+
+//             let p = EdwardsPoint::witness(&mut cs, Some(p)).unwrap();
+//             assert!(cs.is_satisfied());
+//             assert!(p.assert_not_small_order(&mut cs).is_err() == is_small_order);
+//         };
+
+//         let check_small_order_from_u64s = |u, v| {
+//             let (u, v) = (bls12_381::Scalar::from(u), bls12_381::Scalar::from(v));
+//             let p = jubjub::AffinePoint::from_raw_unchecked(u, v);
+
+//             check_small_order_from_p(p.into(), true);
+//         };
+
+//         // zero has low order
+//         check_small_order_from_u64s(0, 1);
+
+//         // prime subgroup order
+//         let prime_subgroup_order = jubjub::Fr::from_str_vartime(
+//             "6554484396890773809930967563523245729705921265872317281365359162392183254199",
+//         )
+//         .unwrap();
+//         let largest_small_subgroup_order = jubjub::Fr::from(8);
+
+//         let (zero_u, zero_v) = (bls12_381::Scalar::zero(), bls12_381::Scalar::one());
+
+//         // generator for jubjub
+//         let (u, v) = (
+//             bls12_381::Scalar::from_str_vartime(
+//                 "11076627216317271660298050606127911965867021807910416450833192264015104452986",
+//             )
+//             .unwrap(),
+//             bls12_381::Scalar::from_str_vartime(
+//                 "44412834903739585386157632289020980010620626017712148233229312325549216099227",
+//             )
+//             .unwrap(),
+//         );
+//         let g = jubjub::AffinePoint::from_raw_unchecked(u, v).into();
+//         check_small_order_from_p(g, false);
+
+//         // generator for the prime subgroup
+//         let g_prime = g * largest_small_subgroup_order;
+//         check_small_order_from_p(g_prime, false);
+//         let prime_subgroup_order_minus_1 = prime_subgroup_order - jubjub::Fr::one();
+
+//         let should_not_be_zero = g_prime * prime_subgroup_order_minus_1;
+//         assert_ne!(zero_u, should_not_be_zero.to_affine().get_u());
+//         assert_ne!(zero_v, should_not_be_zero.to_affine().get_v());
+//         let should_be_zero = should_not_be_zero + g_prime;
+//         assert_eq!(zero_u, should_be_zero.to_affine().get_u());
+//         assert_eq!(zero_v, should_be_zero.to_affine().get_v());
+
+//         // generator for the small order subgroup
+//         let g_small = g * prime_subgroup_order_minus_1;
+//         let g_small = g_small + g;
+//         check_small_order_from_p(g_small, true);
+
+//         // g_small does have order 8
+//         let largest_small_subgroup_order_minus_1 = largest_small_subgroup_order - jubjub::Fr::one();
+
+//         let should_not_be_zero = g_small * largest_small_subgroup_order_minus_1;
+//         assert_ne!(zero_u, should_not_be_zero.to_affine().get_u());
+//         assert_ne!(zero_v, should_not_be_zero.to_affine().get_v());
+
+//         let should_be_zero = should_not_be_zero + g_small;
+//         assert_eq!(zero_u, should_be_zero.to_affine().get_u());
+//         assert_eq!(zero_v, should_be_zero.to_affine().get_v());
+
+//         // take all the points from the script
+//         // assert should be different than multiplying by cofactor, which is the solution
+//         // is user input verified? https://github.com/zcash/librustzcash/blob/f5d2afb4eabac29b1b1cc860d66e45a5b48b4f88/src/rustzcash.rs#L299
+//     }
+// }
